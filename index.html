@@ -8,6 +8,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="人生记录">
 <meta name="description" content="人生记录 — 记录你一生的故事">
+<link rel="manifest" href="manifest.json">
 <title>人生记录</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌱</text></svg>">
 <style>
@@ -1391,80 +1392,10 @@ document.getElementById('btnGlobalAdd').addEventListener('click', () => {
   openEditor(defaultStage, null);
 });
 
-// ============================================================
-// PWA — Manifest
-// ============================================================
-function generateIcon(size) {
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d');
-
-  // Background gradient (rounded rect)
-  const r = size * 0.18;
-  const gradient = ctx.createLinearGradient(0, 0, size, size);
-  gradient.addColorStop(0, '#c1785e');
-  gradient.addColorStop(1, '#e09e7a');
-  ctx.fillStyle = gradient;
-  ctx.beginPath();
-  ctx.moveTo(r, 0);
-  ctx.lineTo(size - r, 0);
-  ctx.arcTo(size, 0, size, r, r);
-  ctx.lineTo(size, size - r);
-  ctx.arcTo(size, size, size - r, size, r);
-  ctx.lineTo(r, size);
-  ctx.arcTo(0, size, 0, size - r, r);
-  ctx.lineTo(0, r);
-  ctx.arcTo(0, 0, r, 0, r);
-  ctx.closePath();
-  ctx.fill();
-
-  // Inner circle
-  ctx.fillStyle = 'rgba(255,255,255,0.15)';
-  ctx.beginPath();
-  ctx.arc(size * 0.68, size * 0.28, size * 0.3, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Tree trunk
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(size * 0.44, size * 0.45, size * 0.12, size * 0.28);
-
-  // Tree crown (simple triangle)
-  ctx.beginPath();
-  ctx.moveTo(size * 0.5, size * 0.12);
-  ctx.lineTo(size * 0.3, size * 0.55);
-  ctx.lineTo(size * 0.7, size * 0.55);
-  ctx.closePath();
-  ctx.fillStyle = '#fff';
-  ctx.fill();
-
-  return canvas.toDataURL('image/png');
-}
-
-function setupManifest() {
-  const manifest = {
-    name: '人生记录',
-    short_name: '人生记录',
-    description: '记录你一生的故事',
-    start_url: '.',
-    display: 'standalone',
-    orientation: 'portrait-primary',
-    background_color: '#fdf6f0',
-    theme_color: '#c1785e',
-    icons: [
-      { src: generateIcon(192), sizes: '192x192', type: 'image/png' },
-      { src: generateIcon(512), sizes: '512x512', type: 'image/png' },
-    ],
-    categories: ['lifestyle', 'productivity'],
-    lang: 'zh-CN',
-  };
-
-  const blob = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('link');
-  link.rel = 'manifest';
-  link.href = url;
-  document.head.appendChild(link);
+function init() {
+  registerSW();
+  populateStageSelect();
+  renderAll();
 }
 
 // ============================================================
@@ -1505,105 +1436,7 @@ window.addEventListener('appinstalled', () => {
   toast('已添加到桌面 🎉');
 });
 
-// ============================================================
-// INIT
-// ============================================================
-function init() {
-  setupManifest();
-  registerSW();
-  populateStageSelect();
-  renderAll();
-}
-
 init();
-
-// Log SW content for users who want to save it as a separate file
-console.log(
-  '%c💡 PWA 提示：\n' +
-  '%c要想完全启用离线支持，请将下方 Service Worker 代码保存为 sw.js，\n' +
-  '放在与 life-record-pwa.html 同一目录下，并通过 HTTP(S) 服务器访问。\n' +
-  '\n%c--- sw.js 内容 ---\n' +
-  'const CACHE = "life-record-v1";\n' +
-  'const URLS = [self.location.href];\n' +
-  'self.addEventListener("install", e => {\n' +
-  '  e.waitUntil(caches.open(CACHE).then(c => c.addAll(URLS).catch(() => {})));\n' +
-  '  self.skipWaiting();\n' +
-  '});\n' +
-  'self.addEventListener("activate", e => {\n' +
-  '  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))));\n' +
-  '  self.clients.claim();\n' +
-  '});\n' +
-  'self.addEventListener("fetch", e => {\n' +
-  '  if (e.request.method !== "GET") return;\n' +
-  '  e.respondWith(caches.match(e.request).then(cached => {\n' +
-  '    const fetched = fetch(e.request).then(res => {\n' +
-  '      if (res && res.status === 200) { const clone = res.clone(); caches.open(CACHE).then(c => c.put(e.request, clone)); }\n' +
-  '      return res;\n' +
-  '    }).catch(() => cached);\n' +
-  '    return cached || fetched;\n' +
-  '  }));\n' +
-  '});',
-  'font-size: 14px; font-weight: bold;',
-  'font-size: 12px;',
-  'font-size: 11px; color: #888;'
-);
 </script>
-
-<!--
-==========================================
-  sw.js — 如需完整离线支持，请将下方代码保存为 sw.js
-  放在与 life-record-pwa.html 同一目录下
-==========================================
-const CACHE = 'life-record-v1';
-const URLS = [self.location.href];
-
-self.addEventListener('install', e => {
-  e.waitUntil(
-    caches.open(CACHE).then(c => c.addAll(URLS).catch(() => {}))
-  );
-  self.skipWaiting();
-});
-
-self.addEventListener('activate', e => {
-  e.waitUntil(
-    caches.keys().then(keys => Promise.all(
-      keys.filter(k => k !== CACHE).map(k => caches.delete(k))
-    ))
-  );
-  self.clients.claim();
-});
-
-self.addEventListener('fetch', e => {
-  if (e.request.method !== 'GET') return;
-  e.respondWith(
-    caches.match(e.request).then(cached => {
-      const fetched = fetch(e.request).then(res => {
-        if (res && res.status === 200) {
-          const clone = res.clone();
-          caches.open(CACHE).then(c => c.put(e.request, clone));
-        }
-        return res;
-      }).catch(() => cached);
-      return cached || fetched;
-    })
-  );
-});
-
-==========================================
-  manifest.json — PWA 清单参考
-==========================================
-{
-  "name": "人生记录",
-  "short_name": "人生记录",
-  "description": "记录你一生的故事",
-  "start_url": ".",
-  "display": "standalone",
-  "orientation": "portrait-primary",
-  "background_color": "#fdf6f0",
-  "theme_color": "#c1785e",
-  "categories": ["lifestyle", "productivity"],
-  "lang": "zh-CN"
-}
--->
 </body>
 </html>
