@@ -783,6 +783,7 @@ body {
 
   <!-- Toolbar -->
   <div class="toolbar">
+    <button class="btn" id="btnFolder">📁 选择存储位置</button>
     <button class="btn" id="btnExport">📤 导出备份</button>
     <button class="btn" id="btnImport">📥 导入备份</button>
     <button class="btn primary" id="btnGlobalAdd">✏️ 添加记录</button>
@@ -860,12 +861,14 @@ body {
 
 <script>
 // ============================================================
-// DATA LAYER — IndexedDB storage (no 5-10MB limit)
+// DATA LAYER — IDB + optional local folder storage (D: drive)
 // ============================================================
 const LEGACY_KEY = 'life-record-data';
 const DB_NAME = 'life-record-db';
-const DB_VERSION = 1;
-const STORE_NAME = 'state';
+const DB_VERSION = 2;
+const STATE_STORE = 'state';
+const HANDLE_STORE = 'handles';
+const DATA_FILE = 'life-record-data.json';
 
 const STAGE_DEFS = [
   { id: 'infancy',           name: '婴儿期', subtitle: '出生 — 学走路',       icon: '👶' },
@@ -882,15 +885,19 @@ const STAGE_DEFS = [
 function getDefaultData() {
   const stages = {};
   STAGE_DEFS.forEach(s => { stages[s.id] = { entries: [] }; });
-  return { version: 1, stages };
+  return { version: 2, stages };
 }
 
+// IndexedDB connection
 function openDB() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
-      if (!req.result.objectStoreNames.contains(STORE_NAME)) {
-        req.result.createObjectStore(STORE_NAME);
+      if (!req.result.objectStoreNames.contains(STATE_STORE)) {
+        req.result.createObjectStore(STATE_STORE);
+      }
+      if (!req.result.objectStoreNames.contains(HANDLE_STORE)) {
+        req.result.createObjectStore(HANDLE_STORE);
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -898,12 +905,121 @@ function openDB() {
   });
 }
 
-async function loadData() {
+// ============================================================
+// FOLDER STORAGE — File System Access API (Chrome/Edge)
+// ============================================================
+let dirHandle = null; // FileSystemDirectoryHandle
+let folderPath = '';  // display name
+
+async function saveDirHandle(handle) {
   try {
     const db = await openDB();
     return new Promise((resolve) => {
-      const tx = db.transaction(STORE_NAME, 'readonly');
-      const req = tx.objectStore(STORE_NAME).get('appData');
+      const tx = db.transaction(HANDLE_STORE, 'readwrite');
+      tx.objectStore(HANDLE_STORE).put(handle, 'dir');
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch {}
+}
+
+async function loadDirHandle() {
+  try {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(HANDLE_STORE, 'readonly');
+      const req = tx.objectStore(HANDLE_STORE).get('dir');
+      req.onsuccess = async () => {
+        if (!req.result) { resolve(null); return; }
+        try {
+          const ok = await verifyPermission(req.result);
+          resolve(ok ? req.result : null);
+        } catch { resolve(null); }
+      };
+      req.onerror = () => resolve(null);
+    });
+  } catch { return null; }
+}
+
+async function verifyPermission(handle) {
+  try {
+    const opts = { mode: 'readwrite' };
+    const perm = await handle.queryPermission(opts);
+    if (perm === 'granted') return true;
+    const asked = await handle.requestPermission(opts);
+    return asked === 'granted';
+  } catch { return false; }
+}
+
+async function pickStorageFolder() {
+  if (!('showDirectoryPicker' in window)) {
+    toast('当前浏览器不支持本地文件夹存储，请使用 Chrome 或 Edge');
+    return false;
+  }
+  try {
+    const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    // Verify writable
+    const test = await handle.getFileHandle('.test', { create: true });
+    await (await test.createWritable()).write('1');
+    await handle.removeEntry('.test');
+
+    dirHandle = handle;
+    folderPath = handle.name;
+    await saveDirHandle(handle);
+
+    // Migrate existing IDB data to folder
+    if (appData) { await saveDataToFolder(appData); }
+
+    updateStorageInfo();
+    updateFolderUI();
+    toast('存储位置已设置：' + handle.name);
+    return true;
+  } catch (e) {
+    if (e.name !== 'AbortError') toast('无法访问文件夹：' + e.message);
+    return false;
+  }
+}
+
+async function resetToBrowserStorage() {
+  dirHandle = null;
+  folderPath = '';
+  try {
+    const db = await openDB();
+    const tx = db.transaction(HANDLE_STORE, 'readwrite');
+    tx.objectStore(HANDLE_STORE).delete('dir');
+  } catch {}
+  updateStorageInfo();
+  updateFolderUI();
+  toast('已切换回浏览器存储');
+}
+
+// ============================================================
+// LOAD — with folder priority
+// ============================================================
+async function loadData() {
+  dirHandle = await loadDirHandle();
+  if (dirHandle) {
+    folderPath = dirHandle.name;
+    try {
+      const fh = await dirHandle.getFileHandle(DATA_FILE);
+      const file = await fh.getFile();
+      const data = JSON.parse(await file.text());
+      const defaults = getDefaultData();
+      for (const key of Object.keys(defaults.stages)) {
+        if (!data.stages[key]) data.stages[key] = { entries: [] };
+      }
+      return data;
+    } catch {
+      // Folder is empty, fall through
+    }
+  }
+
+  // IDB mode
+  try {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STATE_STORE, 'readonly');
+      const req = tx.objectStore(STATE_STORE).get('appData');
       req.onsuccess = () => {
         if (req.result) {
           const data = req.result;
@@ -929,7 +1045,6 @@ function migrateFromLegacy() {
     if (raw) {
       const data = JSON.parse(raw);
       localStorage.removeItem(LEGACY_KEY);
-      // Save to IDB asynchronously, but return data immediately
       saveData(data);
       return data;
     }
@@ -937,12 +1052,44 @@ function migrateFromLegacy() {
   return getDefaultData();
 }
 
+// ============================================================
+// SAVE — folder-first, IDB fallback
+// ============================================================
 async function saveData(data) {
+  if (dirHandle) {
+    const ok = await saveDataToFolder(data);
+    if (ok) {
+      saveDataToIDB(data); // background backup
+      updateStorageInfo();
+      return true;
+    }
+    // Folder save failed, fall through to IDB
+  }
+  return saveDataToIDB(data);
+}
+
+async function saveDataToFolder(data) {
+  try {
+    const fh = await dirHandle.getFileHandle(DATA_FILE, { create: true });
+    const writable = await fh.createWritable();
+    await writable.write(JSON.stringify(data));
+    await writable.close();
+    return true;
+  } catch (e) {
+    toast('写入文件夹失败：' + e.message + '，已回退到浏览器存储');
+    dirHandle = null;
+    folderPath = '';
+    updateFolderUI();
+    return false;
+  }
+}
+
+async function saveDataToIDB(data) {
   try {
     const db = await openDB();
     return new Promise((resolve) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
-      tx.objectStore(STORE_NAME).put(data, 'appData');
+      const tx = db.transaction(STATE_STORE, 'readwrite');
+      tx.objectStore(STATE_STORE).put(data, 'appData');
       tx.oncomplete = () => { updateStorageInfo(); resolve(true); };
       tx.onerror = () => {
         toast('保存失败，请尝试导出备份');
@@ -955,27 +1102,38 @@ async function saveData(data) {
   }
 }
 
+// ============================================================
+// STORAGE INFO
+// ============================================================
 async function getStorageInfo() {
+  if (dirHandle) {
+    try {
+      const fh = await dirHandle.getFileHandle(DATA_FILE);
+      const file = await fh.getFile();
+      return { usage: file.size, quota: 0, mode: 'folder', folder: folderPath };
+    } catch {
+      return { usage: 0, quota: 0, mode: 'folder', folder: folderPath };
+    }
+  }
   try {
     if ('storage' in navigator && 'estimate' in navigator.storage) {
       const est = await navigator.storage.estimate();
-      return { usage: est.usage, quota: est.quota };
+      return { usage: est.usage, quota: est.quota, mode: 'browser' };
     }
   } catch {}
-  // Fallback: estimate from serialized data size
   try {
     const db = await openDB();
     return new Promise((resolve) => {
-      const tx = db.transaction(STORE_NAME, 'readonly');
-      const req = tx.objectStore(STORE_NAME).get('appData');
+      const tx = db.transaction(STATE_STORE, 'readonly');
+      const req = tx.objectStore(STATE_STORE).get('appData');
       req.onsuccess = () => {
         const json = req.result ? JSON.stringify(req.result) : '';
-        resolve({ usage: json.length * 2, quota: 0 }); // UTF-16 estimate
+        resolve({ usage: json.length * 2, quota: 0, mode: 'browser' });
       };
-      req.onerror = () => resolve({ usage: 0, quota: 0 });
+      req.onerror = () => resolve({ usage: 0, quota: 0, mode: 'browser' });
     });
   } catch {
-    return { usage: 0, quota: 0 };
+    return { usage: 0, quota: 0, mode: 'browser' };
   }
 }
 
@@ -990,10 +1148,24 @@ async function updateStorageInfo() {
   const el = document.getElementById('storageInfo');
   if (!el) return;
   const info = await getStorageInfo();
-  if (info.quota > 0) {
-    el.textContent = '存储: ' + formatSize(info.usage) + ' / ' + formatSize(info.quota);
+  if (info.mode === 'folder') {
+    el.textContent = '本地: ' + info.folder + ' (' + formatSize(info.usage) + ')';
+  } else if (info.quota > 0) {
+    el.textContent = '浏览器: ' + formatSize(info.usage) + ' / ' + formatSize(info.quota);
   } else {
-    el.textContent = '存储: ' + formatSize(info.usage);
+    el.textContent = '浏览器: ' + formatSize(info.usage);
+  }
+}
+
+function updateFolderUI() {
+  const btn = document.getElementById('btnFolder');
+  if (!btn) return;
+  if (dirHandle) {
+    btn.textContent = '\u{1F4C1} 存储: ' + folderPath;
+    btn.classList.add('primary');
+  } else {
+    btn.textContent = '\u{1F4C1} 选择存储位置';
+    btn.classList.remove('primary');
   }
 }
 
@@ -1480,6 +1652,20 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ============================================================
+// FOLDER STORAGE
+// ============================================================
+document.getElementById('btnFolder').addEventListener('click', async () => {
+  if (dirHandle) {
+    if (confirm('当前存储位置：' + folderPath + '\n\n切换回浏览器存储？\n（数据会复制到浏览器）')) {
+      if (appData) await saveDataToIDB(appData);
+      await resetToBrowserStorage();
+    }
+  } else {
+    await pickStorageFolder();
+  }
+});
+
+// ============================================================
 // EXPORT / IMPORT
 // ============================================================
 document.getElementById('btnExport').addEventListener('click', () => {
@@ -1713,6 +1899,7 @@ async function init() {
   populateStageSelect();
   renderAll();
   updateStorageInfo();
+  updateFolderUI();
 
   // Request persistent storage (less likely to be evicted by browser)
   if ('storage' in navigator && 'persist' in navigator.storage) {
