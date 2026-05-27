@@ -1665,6 +1665,12 @@ document.getElementById('btnFolder').addEventListener('click', async () => {
   }
 });
 
+// Hide folder button on mobile (not supported)
+if (!('showDirectoryPicker' in window)) {
+  const btn = document.getElementById('btnFolder');
+  if (btn) btn.style.display = 'none';
+}
+
 // ============================================================
 // EXPORT / IMPORT
 // ============================================================
