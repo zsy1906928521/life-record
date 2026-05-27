@@ -778,7 +778,7 @@ body {
 
   <!-- Install Banner -->
   <div class="install-banner" id="installBanner">
-    <span>📲 添加到手机桌面，随时记录</span>
+    <span id="installMsg">📲 添加到手机桌面，随时记录</span>
     <button id="btnInstall">安装</button>
   </div>
 
@@ -1402,32 +1402,99 @@ function init() {
 // PWA — Service Worker
 // ============================================================
 function registerSW() {
-  if (!('serviceWorker' in navigator)) return;
+  if (!('serviceWorker' in navigator)) {
+    showCompatWarning();
+    return;
+  }
   navigator.serviceWorker.register('sw.js').then(reg => {
     console.log('SW registered:', reg.scope);
   }).catch(err => {
     console.log('SW registration failed:', err.message);
+    showCompatWarning();
   });
 }
 
 // ============================================================
-// PWA — Install Prompt
+// PWA — Browser Check & Install
 // ============================================================
+let deferredPrompt = null;
+let installManually = false;
+
+function getBrowserInfo() {
+  const ua = navigator.userAgent;
+  if (ua.indexOf('EdgA') > -1 || ua.indexOf('EdgiOS') > -1) return 'edge';
+  if (ua.indexOf('CriOS') > -1 || (ua.indexOf('Chrome') > -1 && ua.indexOf('Android') > -1)) return 'chrome';
+  if (ua.indexOf('SamsungBrowser') > -1) return 'samsung';
+  if (ua.indexOf('Firefox') > -1) return 'firefox';
+  if (ua.indexOf('QQ/') > -1) return 'qq';
+  if (ua.indexOf('MQQBrowser') > -1) return 'qqbrowser';
+  if (ua.indexOf('UCBrowser') > -1 || ua.indexOf('UCWEB') > -1) return 'uc';
+  if (ua.indexOf('MicroMessenger') > -1) return 'wechat';
+  if (ua.indexOf('Baidu') > -1 || ua.indexOf('baiduboxapp') > -1) return 'baidu';
+  if (ua.indexOf('Safari') > -1) return 'safari';
+  return 'other';
+}
+
+function supportsPWAInstall() {
+  const browser = getBrowserInfo();
+  return ['chrome', 'edge', 'samsung', 'safari'].includes(browser);
+}
+
+function getInstallInstructions() {
+  const browser = getBrowserInfo();
+  const map = {
+    chrome: '点右上角 ⋮ → 添加至主屏幕',
+    edge: '点右下角 ⋯ → 添加至手机',
+    samsung: '点底部 → 添加至主屏幕',
+    safari: '点底部 分享 → 添加到主屏幕',
+    qq: '请用 Chrome 浏览器打开此页面',
+    qqbrowser: '请用 Chrome 浏览器打开此页面',
+    uc: '请用 Chrome 浏览器打开此页面',
+    wechat: '请点击右上角 ··· → 在浏览器中打开 → 选 Chrome',
+    baidu: '请用 Chrome 浏览器打开此页面',
+    firefox: 'Firefox 安卓版不支持安装 PWA，请用 Chrome',
+    other: '请用 Chrome 浏览器打开此页面',
+  };
+  return map[browser] || map.other;
+}
+
+function showCompatWarning() {
+  const browser = getBrowserInfo();
+  if (!supportsPWAInstall()) {
+    const msg = '⚠️ ' + getInstallInstructions();
+    $installBanner.querySelector('#installMsg').textContent = msg;
+    document.getElementById('btnInstall').textContent = '知道了';
+    document.getElementById('btnInstall').onclick = () => $installBanner.classList.remove('show');
+    $installBanner.classList.add('show');
+    installManually = true;
+  }
+}
+
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   deferredPrompt = e;
-  $installBanner.classList.add('show');
+  if (!installManually) {
+    const msg = '📲 添加到手机桌面，随时记录';
+    $installBanner.querySelector('#installMsg').textContent = msg;
+    document.getElementById('btnInstall').textContent = '安装';
+    $installBanner.classList.add('show');
+  }
 });
 
 document.getElementById('btnInstall').addEventListener('click', async () => {
-  if (!deferredPrompt) return;
-  deferredPrompt.prompt();
-  const result = await deferredPrompt.userChoice;
-  if (result.outcome === 'accepted') {
-    toast('安装成功！');
+  if (deferredPrompt) {
+    deferredPrompt.prompt();
+    const result = await deferredPrompt.userChoice;
+    if (result.outcome === 'accepted') {
+      toast('安装成功！');
+    }
+    deferredPrompt = null;
+    $installBanner.classList.remove('show');
+  } else if (installManually) {
+    $installBanner.classList.remove('show');
+  } else {
+    toast(getInstallInstructions());
   }
-  deferredPrompt = null;
-  $installBanner.classList.remove('show');
 });
 
 window.addEventListener('appinstalled', () => {
