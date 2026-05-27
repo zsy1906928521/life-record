@@ -794,7 +794,7 @@ body {
 
   <!-- Footer -->
   <div class="footer">
-    人生记录 v1.0 &nbsp;|&nbsp; 数据仅存储于本机浏览器 &nbsp;|&nbsp; 定期导出备份
+    人生记录 v2.0 &nbsp;|&nbsp; 数据仅存储于本机浏览器 &nbsp;|&nbsp; 定期导出备份
   </div>
 </div>
 
@@ -1406,11 +1406,16 @@ function registerSW() {
     showCompatWarning();
     return;
   }
-  navigator.serviceWorker.register('sw.js').then(reg => {
-    console.log('SW registered:', reg.scope);
-  }).catch(err => {
-    console.log('SW registration failed:', err.message);
-    showCompatWarning();
+  // Unregister ALL old service workers first, then register fresh
+  navigator.serviceWorker.getRegistrations().then(regs => {
+    return Promise.all(regs.map(r => r.unregister()));
+  }).then(() => {
+    navigator.serviceWorker.register('sw.js').then(reg => {
+      console.log('SW registered v2:', reg.scope);
+    }).catch(err => {
+      console.log('SW registration failed:', err.message);
+      showCompatWarning();
+    });
   });
 }
 
