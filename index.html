@@ -8,7 +8,6 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="人生记录">
 <meta name="description" content="人生记录 — 记录你一生的故事">
-<link rel="manifest" href="manifest.json">
 <title>人生记录</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌱</text></svg>">
 <style>
@@ -778,7 +777,7 @@ body {
 
   <!-- Install Banner -->
   <div class="install-banner" id="installBanner">
-    <span id="installMsg">📲 添加到手机桌面，随时记录</span>
+    <span>📲 添加到手机桌面，随时记录</span>
     <button id="btnInstall">安装</button>
   </div>
 
@@ -794,7 +793,7 @@ body {
 
   <!-- Footer -->
   <div class="footer">
-    人生记录 v2.0 &nbsp;|&nbsp; 数据仅存储于本机浏览器 &nbsp;|&nbsp; 定期导出备份
+    人生记录 v2.0 &nbsp;|&nbsp; <span id="storageInfo">存储: 计算中...</span> &nbsp;|&nbsp; 定期导出备份
   </div>
 </div>
 
@@ -861,9 +860,13 @@ body {
 
 <script>
 // ============================================================
-// DATA LAYER
+// DATA LAYER — IndexedDB storage (no 5-10MB limit)
 // ============================================================
-const STORAGE_KEY = 'life-record-data';
+const LEGACY_KEY = 'life-record-data';
+const DB_NAME = 'life-record-db';
+const DB_VERSION = 1;
+const STORE_NAME = 'state';
+
 const STAGE_DEFS = [
   { id: 'infancy',           name: '婴儿期', subtitle: '出生 — 学走路',       icon: '👶' },
   { id: 'childhood',         name: '童年',   subtitle: '学走路 — 小学',       icon: '🧒' },
@@ -882,32 +885,115 @@ function getDefaultData() {
   return { version: 1, stages };
 }
 
-function loadData() {
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      if (!req.result.objectStoreNames.contains(STORE_NAME)) {
+        req.result.createObjectStore(STORE_NAME);
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function loadData() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return getDefaultData();
-    const data = JSON.parse(raw);
-    // Merge with defaults to handle newly added stages
-    const defaults = getDefaultData();
-    for (const key of Object.keys(defaults.stages)) {
-      if (!data.stages[key]) data.stages[key] = { entries: [] };
-    }
-    return data;
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const req = tx.objectStore(STORE_NAME).get('appData');
+      req.onsuccess = () => {
+        if (req.result) {
+          const data = req.result;
+          const defaults = getDefaultData();
+          for (const key of Object.keys(defaults.stages)) {
+            if (!data.stages[key]) data.stages[key] = { entries: [] };
+          }
+          resolve(data);
+        } else {
+          resolve(migrateFromLegacy());
+        }
+      };
+      req.onerror = () => resolve(migrateFromLegacy());
+    });
   } catch {
-    return getDefaultData();
+    return migrateFromLegacy();
   }
 }
 
-function saveData(data) {
+function migrateFromLegacy() {
   try {
-    const json = JSON.stringify(data);
-    localStorage.setItem(STORAGE_KEY, json);
-    return true;
-  } catch (e) {
-    if (e.name === 'QuotaExceededError') {
-      toast('存储空间不足！请删除部分照片或导出备份后清理数据');
+    const raw = localStorage.getItem(LEGACY_KEY);
+    if (raw) {
+      const data = JSON.parse(raw);
+      localStorage.removeItem(LEGACY_KEY);
+      // Save to IDB asynchronously, but return data immediately
+      saveData(data);
+      return data;
     }
+  } catch {}
+  return getDefaultData();
+}
+
+async function saveData(data) {
+  try {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).put(data, 'appData');
+      tx.oncomplete = () => { updateStorageInfo(); resolve(true); };
+      tx.onerror = () => {
+        toast('保存失败，请尝试导出备份');
+        resolve(false);
+      };
+    });
+  } catch (e) {
+    toast('保存失败：' + e.message);
     return false;
+  }
+}
+
+async function getStorageInfo() {
+  try {
+    if ('storage' in navigator && 'estimate' in navigator.storage) {
+      const est = await navigator.storage.estimate();
+      return { usage: est.usage, quota: est.quota };
+    }
+  } catch {}
+  // Fallback: estimate from serialized data size
+  try {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const req = tx.objectStore(STORE_NAME).get('appData');
+      req.onsuccess = () => {
+        const json = req.result ? JSON.stringify(req.result) : '';
+        resolve({ usage: json.length * 2, quota: 0 }); // UTF-16 estimate
+      };
+      req.onerror = () => resolve({ usage: 0, quota: 0 });
+    });
+  } catch {
+    return { usage: 0, quota: 0 };
+  }
+}
+
+function formatSize(bytes) {
+  if (!bytes || bytes === 0) return '0 KB';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+async function updateStorageInfo() {
+  const el = document.getElementById('storageInfo');
+  if (!el) return;
+  const info = await getStorageInfo();
+  if (info.quota > 0) {
+    el.textContent = '存储: ' + formatSize(info.usage) + ' / ' + formatSize(info.quota);
+  } else {
+    el.textContent = '存储: ' + formatSize(info.usage);
   }
 }
 
@@ -918,7 +1004,7 @@ function generateId() {
 // ============================================================
 // STATE
 // ============================================================
-let appData = loadData();
+let appData = null;
 let editingEntry = null; // { stageId, entryId } or null
 let pendingPhotos = []; // base64 strings during editing
 let deferredPrompt = null;
@@ -1198,21 +1284,90 @@ function renderPhotoPicker() {
   $photoPicker.appendChild(addBtn);
 }
 
-$photoInput.addEventListener('change', () => {
-  const files = Array.from($photoInput.files);
-  files.forEach(file => {
-    if (file.size > 10 * 1024 * 1024) {
-      toast('照片超过 10MB，已跳过');
+// ============================================================
+// PHOTO COMPRESSION — reduce size by 90-95%
+// ============================================================
+function compressPhoto(file) {
+  return new Promise((resolve) => {
+    if (!file.type.startsWith('image/')) {
+      // Not an image — store as-is (unlikely with accept="image/*")
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.readAsDataURL(file);
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      pendingPhotos.push(reader.result);
-      renderPhotoPicker();
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const maxDim = 1920;
+      let w = img.width;
+      let h = img.height;
+      if (w > maxDim || h > maxDim) {
+        const ratio = Math.min(maxDim / w, maxDim / h);
+        w = Math.round(w * ratio);
+        h = Math.round(h * ratio);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, 0, 0, w, h);
+      canvas.toBlob((blob) => {
+        if (blob) {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.readAsDataURL(blob);
+        } else {
+          // Canvas toBlob fallback (e.g. Safari old versions)
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
+          resolve(dataUrl);
+        }
+      }, 'image/jpeg', 0.75);
     };
-    reader.readAsDataURL(file);
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      // Fallback: store original
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.readAsDataURL(file);
+    };
+    img.src = url;
   });
+}
+
+$photoInput.addEventListener('change', async () => {
+  const files = Array.from($photoInput.files);
   $photoInput.value = '';
+  if (files.length === 0) return;
+
+  toast('正在压缩照片...');
+
+  const results = await Promise.all(files.map(f => compressPhoto(f).catch(() => null)));
+  const valid = results.filter(r => r !== null);
+
+  // Remove the "compressing" toast by letting it expire naturally
+  if (valid.length < files.length) {
+    toast(`${files.length - valid.length} 张照片处理失败，已跳过`);
+  }
+
+  pendingPhotos.push(...valid);
+  renderPhotoPicker();
+
+  // Show compression stats
+  let origTotal = 0, compressedTotal = 0;
+  files.forEach((f, i) => {
+    if (results[i]) {
+      origTotal += f.size;
+      compressedTotal += Math.round(results[i].length * 0.75); // base64 → raw bytes estimate
+    }
+  });
+  if (origTotal > 0 && compressedTotal > 0) {
+    const saved = origTotal > compressedTotal ? `节省 ${formatSize(origTotal - compressedTotal)}` : '';
+    if (saved) toast(`已压缩 ${files.length} 张照片，${saved}`);
+  }
 });
 
 function getEditorData() {
@@ -1228,7 +1383,7 @@ function getEditorData() {
   };
 }
 
-function saveEntry() {
+async function saveEntry() {
   const entry = getEditorData();
   if (!entry.date && !entry.description && entry.photos.length === 0) {
     toast('请至少填写日期、描述或添加照片');
@@ -1238,19 +1393,15 @@ function saveEntry() {
   const stageId = $entryStage.value;
 
   if (editingEntry) {
-    // Update existing
     const oldStageId = editingEntry.stageId;
     if (oldStageId !== stageId) {
-      // Moved to different stage — remove from old, add to new
       appData.stages[oldStageId].entries = appData.stages[oldStageId].entries.filter(e => e.id !== editingEntry.entryId);
       appData.stages[stageId].entries.push(entry);
     } else {
-      // Same stage — update in place
       const idx = appData.stages[stageId].entries.findIndex(e => e.id === editingEntry.entryId);
       if (idx !== -1) appData.stages[stageId].entries[idx] = entry;
     }
   } else {
-    // New entry
     appData.stages[stageId].entries.push(entry);
   }
 
@@ -1259,17 +1410,17 @@ function saveEntry() {
     s.entries.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   });
 
-  if (!saveData(appData)) return;
+  if (!(await saveData(appData))) return;
 
   closeEditor();
   renderAll();
   toast('已保存 ✓');
 }
 
-function deleteEntry(stageId, entryId) {
+async function deleteEntry(stageId, entryId) {
   if (!confirm('确定要删除这条记录吗？此操作不可撤销。')) return;
   appData.stages[stageId].entries = appData.stages[stageId].entries.filter(e => e.id !== entryId);
-  saveData(appData);
+  await saveData(appData);
   renderAll();
   toast('已删除');
 }
@@ -1291,14 +1442,14 @@ $modalOverlay.addEventListener('click', (e) => {
   if (e.target === $modalOverlay) closeEditor();
 });
 
-document.getElementById('btnSave').addEventListener('click', saveEntry);
+document.getElementById('btnSave').addEventListener('click', async () => { await saveEntry(); });
 
-document.getElementById('btnDeleteEntry').addEventListener('click', () => {
+document.getElementById('btnDeleteEntry').addEventListener('click', async () => {
   if (!editingEntry) return;
   if (!confirm('确定要删除这条记录吗？此操作不可撤销。')) return;
   const { stageId, entryId } = editingEntry;
   appData.stages[stageId].entries = appData.stages[stageId].entries.filter(e => e.id !== entryId);
-  saveData(appData);
+  await saveData(appData);
   closeEditor();
   renderAll();
   toast('已删除');
@@ -1353,21 +1504,20 @@ $importFileInput.addEventListener('change', () => {
   const file = $importFileInput.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
       const imported = JSON.parse(reader.result);
       if (!imported.stages || typeof imported.stages !== 'object') {
         throw new Error('无效的数据格式');
       }
       if (!confirm(`即将导入备份数据（${file.name}），当前数据将被覆盖，确定继续？`)) return;
-      // Merge with defaults
       const defaults = getDefaultData();
       for (const key of Object.keys(defaults.stages)) {
         if (!imported.stages[key]) imported.stages[key] = { entries: [] };
       }
       imported.version = imported.version || 1;
       appData = imported;
-      saveData(appData);
+      await saveData(appData);
       renderAll();
       toast('数据已导入 ✓');
     } catch {
@@ -1392,112 +1542,159 @@ document.getElementById('btnGlobalAdd').addEventListener('click', () => {
   openEditor(defaultStage, null);
 });
 
-function init() {
-  registerSW();
-  populateStageSelect();
-  renderAll();
+// ============================================================
+// PWA — Manifest
+// ============================================================
+function generateIcon(size) {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+
+  // Background gradient (rounded rect)
+  const r = size * 0.18;
+  const gradient = ctx.createLinearGradient(0, 0, size, size);
+  gradient.addColorStop(0, '#c1785e');
+  gradient.addColorStop(1, '#e09e7a');
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.moveTo(r, 0);
+  ctx.lineTo(size - r, 0);
+  ctx.arcTo(size, 0, size, r, r);
+  ctx.lineTo(size, size - r);
+  ctx.arcTo(size, size, size - r, size, r);
+  ctx.lineTo(r, size);
+  ctx.arcTo(0, size, 0, size - r, r);
+  ctx.lineTo(0, r);
+  ctx.arcTo(0, 0, r, 0, r);
+  ctx.closePath();
+  ctx.fill();
+
+  // Inner circle
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.beginPath();
+  ctx.arc(size * 0.68, size * 0.28, size * 0.3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Tree trunk
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(size * 0.44, size * 0.45, size * 0.12, size * 0.28);
+
+  // Tree crown (simple triangle)
+  ctx.beginPath();
+  ctx.moveTo(size * 0.5, size * 0.12);
+  ctx.lineTo(size * 0.3, size * 0.55);
+  ctx.lineTo(size * 0.7, size * 0.55);
+  ctx.closePath();
+  ctx.fillStyle = '#fff';
+  ctx.fill();
+
+  return canvas.toDataURL('image/png');
+}
+
+function setupManifest() {
+  const manifest = {
+    name: '人生记录',
+    short_name: '人生记录',
+    description: '记录你一生的故事',
+    start_url: '.',
+    display: 'standalone',
+    orientation: 'portrait-primary',
+    background_color: '#fdf6f0',
+    theme_color: '#c1785e',
+    icons: [
+      { src: generateIcon(192), sizes: '192x192', type: 'image/png' },
+      { src: generateIcon(512), sizes: '512x512', type: 'image/png' },
+    ],
+    categories: ['lifestyle', 'productivity'],
+    lang: 'zh-CN',
+  };
+
+  const blob = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('link');
+  link.rel = 'manifest';
+  link.href = url;
+  document.head.appendChild(link);
 }
 
 // ============================================================
 // PWA — Service Worker
 // ============================================================
 function registerSW() {
-  if (!('serviceWorker' in navigator)) {
-    showCompatWarning();
-    return;
-  }
-  // Unregister ALL old service workers first, then register fresh
-  navigator.serviceWorker.getRegistrations().then(regs => {
-    return Promise.all(regs.map(r => r.unregister()));
-  }).then(() => {
-    navigator.serviceWorker.register('sw.js').then(reg => {
-      console.log('SW registered v2:', reg.scope);
-    }).catch(err => {
-      console.log('SW registration failed:', err.message);
-      showCompatWarning();
-    });
+  if (!('serviceWorker' in navigator)) return;
+
+  // Build SW from inline code (works when served over HTTPS)
+  const swCode = `
+const CACHE = 'life-record-v1';
+const URLS = [self.location.href];
+
+self.addEventListener('install', e => {
+  e.waitUntil(
+    caches.open(CACHE).then(c => c.addAll(URLS).catch(() => {}))
+  );
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys().then(keys => Promise.all(
+      keys.filter(k => k !== CACHE).map(k => caches.delete(k))
+    ))
+  );
+  self.clients.claim();
+});
+
+self.addEventListener('fetch', e => {
+  if (e.request.method !== 'GET') return;
+  e.respondWith(
+    caches.match(e.request).then(cached => {
+      const fetched = fetch(e.request).then(res => {
+        if (res && res.status === 200) {
+          const clone = res.clone();
+          caches.open(CACHE).then(c => c.put(e.request, clone));
+        }
+        return res;
+      }).catch(() => cached);
+      return cached || fetched;
+    })
+  );
+});
+`;
+
+  const swBlob = new Blob([swCode], { type: 'application/javascript' });
+  const swUrl = URL.createObjectURL(swBlob);
+
+  // Try to register the SW. Note: blob URLs may not work for SW in all browsers.
+  // This is a best-effort approach; for full PWA support, save sw.js alongside the HTML.
+  navigator.serviceWorker.register(swUrl, { scope: '/' }).then(reg => {
+    console.log('SW registered:', reg.scope);
+  }).catch(() => {
+    // SW registration from blob URL is not supported — silent fallback.
+    // To fully enable offline support, extract the sw.js content above
+    // and save it as a separate sw.js file in the same directory.
+    console.log('SW: blob registration not supported. Save sw.js separately for full offline support.');
   });
 }
 
 // ============================================================
-// PWA — Browser Check & Install
+// PWA — Install Prompt
 // ============================================================
-
-function getBrowserInfo() {
-  const ua = navigator.userAgent;
-  if (ua.indexOf('EdgA') > -1 || ua.indexOf('EdgiOS') > -1) return 'edge';
-  if (ua.indexOf('CriOS') > -1 || (ua.indexOf('Chrome') > -1 && ua.indexOf('Android') > -1)) return 'chrome';
-  if (ua.indexOf('SamsungBrowser') > -1) return 'samsung';
-  if (ua.indexOf('Firefox') > -1) return 'firefox';
-  if (ua.indexOf('QQ/') > -1) return 'qq';
-  if (ua.indexOf('MQQBrowser') > -1) return 'qqbrowser';
-  if (ua.indexOf('UCBrowser') > -1 || ua.indexOf('UCWEB') > -1) return 'uc';
-  if (ua.indexOf('MicroMessenger') > -1) return 'wechat';
-  if (ua.indexOf('Baidu') > -1 || ua.indexOf('baiduboxapp') > -1) return 'baidu';
-  if (ua.indexOf('Safari') > -1) return 'safari';
-  return 'other';
-}
-
-function supportsPWAInstall() {
-  const browser = getBrowserInfo();
-  return ['chrome', 'edge', 'samsung', 'safari'].includes(browser);
-}
-
-function getInstallInstructions() {
-  const browser = getBrowserInfo();
-  const map = {
-    chrome: '点右上角 ⋮ → 添加至主屏幕',
-    edge: '点右下角 ⋯ → 添加至手机',
-    samsung: '点底部 → 添加至主屏幕',
-    safari: '点底部 分享 → 添加到主屏幕',
-    qq: '请用 Chrome 浏览器打开此页面',
-    qqbrowser: '请用 Chrome 浏览器打开此页面',
-    uc: '请用 Chrome 浏览器打开此页面',
-    wechat: '请点击右上角 ··· → 在浏览器中打开 → 选 Chrome',
-    baidu: '请用 Chrome 浏览器打开此页面',
-    firefox: 'Firefox 安卓版不支持安装 PWA，请用 Chrome',
-    other: '请用 Chrome 浏览器打开此页面',
-  };
-  return map[browser] || map.other;
-}
-
-function showCompatWarning() {
-  const browser = getBrowserInfo();
-  if (!supportsPWAInstall()) {
-    const msg = '⚠️ ' + getInstallInstructions();
-    $installBanner.querySelector('#installMsg').textContent = msg;
-    document.getElementById('btnInstall').textContent = '知道了';
-    document.getElementById('btnInstall').onclick = () => $installBanner.classList.remove('show');
-    $installBanner.classList.add('show');
-    installManually = true;
-  }
-}
-
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   deferredPrompt = e;
-  if (!installManually) {
-    const msg = '📲 添加到手机桌面，随时记录';
-    $installBanner.querySelector('#installMsg').textContent = msg;
-    document.getElementById('btnInstall').textContent = '安装';
-    $installBanner.classList.add('show');
-  }
+  $installBanner.classList.add('show');
 });
 
 document.getElementById('btnInstall').addEventListener('click', async () => {
-  if (deferredPrompt) {
-    deferredPrompt.prompt();
-    const result = await deferredPrompt.userChoice;
-    if (result.outcome === 'accepted') {
-      toast('安装成功！');
-    }
-    deferredPrompt = null;
-    $installBanner.classList.remove('show');
-  } else if (installManually) {
-    $installBanner.classList.remove('show');
-  } else {
-    toast(getInstallInstructions());
+  if (!deferredPrompt) return;
+  deferredPrompt.prompt();
+  const result = await deferredPrompt.userChoice;
+  if (result.outcome === 'accepted') {
+    toast('安装成功！');
   }
+  deferredPrompt = null;
+  $installBanner.classList.remove('show');
 });
 
 window.addEventListener('appinstalled', () => {
@@ -1506,7 +1703,115 @@ window.addEventListener('appinstalled', () => {
   toast('已添加到桌面 🎉');
 });
 
+// ============================================================
+// INIT
+// ============================================================
+async function init() {
+  appData = await loadData();
+  setupManifest();
+  registerSW();
+  populateStageSelect();
+  renderAll();
+  updateStorageInfo();
+
+  // Request persistent storage (less likely to be evicted by browser)
+  if ('storage' in navigator && 'persist' in navigator.storage) {
+    const persisted = await navigator.storage.persist();
+    if (persisted) {
+      console.log('持久存储已授予 — 数据不会被浏览器自动清理');
+    }
+  }
+}
+
 init();
+
+// Log SW content for users who want to save it as a separate file
+console.log(
+  '%c💡 PWA 提示：\n' +
+  '%c要想完全启用离线支持，请将下方 Service Worker 代码保存为 sw.js，\n' +
+  '放在与 life-record-pwa.html 同一目录下，并通过 HTTP(S) 服务器访问。\n' +
+  '\n%c--- sw.js 内容 ---\n' +
+  'const CACHE = "life-record-v1";\n' +
+  'const URLS = [self.location.href];\n' +
+  'self.addEventListener("install", e => {\n' +
+  '  e.waitUntil(caches.open(CACHE).then(c => c.addAll(URLS).catch(() => {})));\n' +
+  '  self.skipWaiting();\n' +
+  '});\n' +
+  'self.addEventListener("activate", e => {\n' +
+  '  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))));\n' +
+  '  self.clients.claim();\n' +
+  '});\n' +
+  'self.addEventListener("fetch", e => {\n' +
+  '  if (e.request.method !== "GET") return;\n' +
+  '  e.respondWith(caches.match(e.request).then(cached => {\n' +
+  '    const fetched = fetch(e.request).then(res => {\n' +
+  '      if (res && res.status === 200) { const clone = res.clone(); caches.open(CACHE).then(c => c.put(e.request, clone)); }\n' +
+  '      return res;\n' +
+  '    }).catch(() => cached);\n' +
+  '    return cached || fetched;\n' +
+  '  }));\n' +
+  '});',
+  'font-size: 14px; font-weight: bold;',
+  'font-size: 12px;',
+  'font-size: 11px; color: #888;'
+);
 </script>
+
+<!--
+==========================================
+  sw.js — 如需完整离线支持，请将下方代码保存为 sw.js
+  放在与 life-record-pwa.html 同一目录下
+==========================================
+const CACHE = 'life-record-v1';
+const URLS = [self.location.href];
+
+self.addEventListener('install', e => {
+  e.waitUntil(
+    caches.open(CACHE).then(c => c.addAll(URLS).catch(() => {}))
+  );
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys().then(keys => Promise.all(
+      keys.filter(k => k !== CACHE).map(k => caches.delete(k))
+    ))
+  );
+  self.clients.claim();
+});
+
+self.addEventListener('fetch', e => {
+  if (e.request.method !== 'GET') return;
+  e.respondWith(
+    caches.match(e.request).then(cached => {
+      const fetched = fetch(e.request).then(res => {
+        if (res && res.status === 200) {
+          const clone = res.clone();
+          caches.open(CACHE).then(c => c.put(e.request, clone));
+        }
+        return res;
+      }).catch(() => cached);
+      return cached || fetched;
+    })
+  );
+});
+
+==========================================
+  manifest.json — PWA 清单参考
+==========================================
+{
+  "name": "人生记录",
+  "short_name": "人生记录",
+  "description": "记录你一生的故事",
+  "start_url": ".",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#fdf6f0",
+  "theme_color": "#c1785e",
+  "categories": ["lifestyle", "productivity"],
+  "lang": "zh-CN"
+}
+-->
 </body>
 </html>

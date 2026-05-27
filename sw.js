@@ -1,4 +1,4 @@
-const CACHE = 'life-record-v2';
+const CACHE = 'life-record-v3';
 
 self.addEventListener('install', e => {
   e.waitUntil(self.skipWaiting());
