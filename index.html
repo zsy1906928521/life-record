@@ -1403,7 +1403,7 @@ function init() {
 // ============================================================
 function registerSW() {
   if (!('serviceWorker' in navigator)) return;
-  navigator.serviceWorker.register('sw.js', { scope: '/' }).then(reg => {
+  navigator.serviceWorker.register('sw.js').then(reg => {
     console.log('SW registered:', reg.scope);
   }).catch(err => {
     console.log('SW registration failed:', err.message);
