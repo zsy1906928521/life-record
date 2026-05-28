@@ -1745,56 +1745,10 @@ document.getElementById('btnGlobalAdd').addEventListener('click', () => {
 function registerSW() {
   if (!('serviceWorker' in navigator)) return;
 
-  // Build SW from inline code (works when served over HTTPS)
-  const swCode = `
-const CACHE = 'life-record-v2';
-const URLS = [self.location.href];
-
-self.addEventListener('install', e => {
-  e.waitUntil(
-    caches.open(CACHE).then(c => c.addAll(URLS).catch(() => {}))
-  );
-  self.skipWaiting();
-});
-
-self.addEventListener('activate', e => {
-  e.waitUntil(
-    caches.keys().then(keys => Promise.all(
-      keys.filter(k => k !== CACHE).map(k => caches.delete(k))
-    ))
-  );
-  self.clients.claim();
-});
-
-self.addEventListener('fetch', e => {
-  if (e.request.method !== 'GET') return;
-  e.respondWith(
-    caches.match(e.request).then(cached => {
-      const fetched = fetch(e.request).then(res => {
-        if (res && res.status === 200) {
-          const clone = res.clone();
-          caches.open(CACHE).then(c => c.put(e.request, clone));
-        }
-        return res;
-      }).catch(() => cached);
-      return cached || fetched;
-    })
-  );
-});
-`;
-
-  const swBlob = new Blob([swCode], { type: 'application/javascript' });
-  const swUrl = URL.createObjectURL(swBlob);
-
-  // Try to register the SW. Note: blob URLs may not work for SW in all browsers.
-  // This is a best-effort approach; for full PWA support, save sw.js alongside the HTML.
-  navigator.serviceWorker.register(swUrl, { scope: '/' }).then(reg => {
+  navigator.serviceWorker.register('sw.js', { scope: './' }).then(reg => {
     console.log('SW registered:', reg.scope);
-  }).catch(() => {
-    // SW registration from blob URL is not supported — silent fallback.
-    // To fully enable offline support, extract the sw.js content above
-    // and save it as a separate sw.js file in the same directory.
-    console.log('SW: blob registration not supported. Save sw.js separately for full offline support.');
+  }).catch(err => {
+    console.warn('SW registration failed:', err);
   });
 }
 
@@ -1845,94 +1799,8 @@ async function init() {
 }
 
 init();
-
-// Log SW content for users who want to save it as a separate file
-console.log(
-  '%c💡 PWA 提示：\n' +
-  '%c要想完全启用离线支持，请将下方 Service Worker 代码保存为 sw.js，\n' +
-  '放在与 life-record-pwa.html 同一目录下，并通过 HTTP(S) 服务器访问。\n' +
-  '\n%c--- sw.js 内容 ---\n' +
-  'const CACHE = "life-record-v1";\n' +
-  'const URLS = [self.location.href];\n' +
-  'self.addEventListener("install", e => {\n' +
-  '  e.waitUntil(caches.open(CACHE).then(c => c.addAll(URLS).catch(() => {})));\n' +
-  '  self.skipWaiting();\n' +
-  '});\n' +
-  'self.addEventListener("activate", e => {\n' +
-  '  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))));\n' +
-  '  self.clients.claim();\n' +
-  '});\n' +
-  'self.addEventListener("fetch", e => {\n' +
-  '  if (e.request.method !== "GET") return;\n' +
-  '  e.respondWith(caches.match(e.request).then(cached => {\n' +
-  '    const fetched = fetch(e.request).then(res => {\n' +
-  '      if (res && res.status === 200) { const clone = res.clone(); caches.open(CACHE).then(c => c.put(e.request, clone)); }\n' +
-  '      return res;\n' +
-  '    }).catch(() => cached);\n' +
-  '    return cached || fetched;\n' +
-  '  }));\n' +
-  '});',
-  'font-size: 14px; font-weight: bold;',
-  'font-size: 12px;',
-  'font-size: 11px; color: #888;'
-);
 </script>
 
-<!--
-==========================================
-  sw.js — 如需完整离线支持，请将下方代码保存为 sw.js
-  放在与 life-record-pwa.html 同一目录下
-==========================================
-const CACHE = 'life-record-v2';
-const URLS = [self.location.href];
 
-self.addEventListener('install', e => {
-  e.waitUntil(
-    caches.open(CACHE).then(c => c.addAll(URLS).catch(() => {}))
-  );
-  self.skipWaiting();
-});
-
-self.addEventListener('activate', e => {
-  e.waitUntil(
-    caches.keys().then(keys => Promise.all(
-      keys.filter(k => k !== CACHE).map(k => caches.delete(k))
-    ))
-  );
-  self.clients.claim();
-});
-
-self.addEventListener('fetch', e => {
-  if (e.request.method !== 'GET') return;
-  e.respondWith(
-    caches.match(e.request).then(cached => {
-      const fetched = fetch(e.request).then(res => {
-        if (res && res.status === 200) {
-          const clone = res.clone();
-          caches.open(CACHE).then(c => c.put(e.request, clone));
-        }
-        return res;
-      }).catch(() => cached);
-      return cached || fetched;
-    })
-  );
-});
-
-==========================================
-  manifest.json — PWA 清单参考
-==========================================
-{
-  "name": "Life日志",
-  "short_name": "Life日志",
-  "description": "记录你一生的故事",
-  "start_url": ".",
-  "display": "standalone",
-  "orientation": "portrait-primary",
-  "background_color": "#fdf6f0",
-  "theme_color": "#c1785e",
-  "categories": ["lifestyle", "productivity"],
-  "lang": "zh-CN"
-}
--->
 </body>
 </html>

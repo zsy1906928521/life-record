@@ -1,15 +1,17 @@
 {
+  "id": "life-record-pwa",
   "name": "Life日志",
   "short_name": "Life日志",
   "description": "记录你一生的故事",
   "start_url": ".",
+  "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
   "background_color": "#fdf6f0",
   "theme_color": "#c1785e",
   "icons": [
-    { "src": "tubiao.jpg", "sizes": "192x192", "type": "image/jpeg" },
-    { "src": "tubiao.jpg", "sizes": "512x512", "type": "image/jpeg" }
+    { "src": "tubiao.jpg", "sizes": "192x192", "type": "image/jpeg", "purpose": "any maskable" },
+    { "src": "tubiao.jpg", "sizes": "512x512", "type": "image/jpeg", "purpose": "any maskable" }
   ],
   "categories": ["lifestyle", "productivity"],
   "lang": "zh-CN"
