@@ -1747,7 +1747,7 @@ function registerSW() {
 
   // Build SW from inline code (works when served over HTTPS)
   const swCode = `
-const CACHE = 'life-record-v1';
+const CACHE = 'life-record-v2';
 const URLS = [self.location.href];
 
 self.addEventListener('install', e => {
@@ -1883,7 +1883,7 @@ console.log(
   sw.js — 如需完整离线支持，请将下方代码保存为 sw.js
   放在与 life-record-pwa.html 同一目录下
 ==========================================
-const CACHE = 'life-record-v1';
+const CACHE = 'life-record-v2';
 const URLS = [self.location.href];
 
 self.addEventListener('install', e => {
