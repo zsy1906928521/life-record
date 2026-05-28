@@ -1,6 +1,6 @@
 {
-  "name": "人生记录",
-  "short_name": "人生记录",
+  "name": "Life日志",
+  "short_name": "Life日志",
   "description": "记录你一生的故事",
   "start_url": ".",
   "display": "standalone",

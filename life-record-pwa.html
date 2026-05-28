@@ -6,9 +6,9 @@
 <meta name="theme-color" content="#c1785e">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="人生记录">
-<meta name="description" content="人生记录 — 记录你一生的故事">
-<title>人生记录</title>
+<meta name="apple-mobile-web-app-title" content="Life日志">
+<meta name="description" content="Life日志 — 记录你一生的故事">
+<title>Life日志</title>
 <link rel="icon" href="tubiao.jpg">
 <link rel="apple-touch-icon" href="tubiao.jpg">
 <link rel="manifest" href="manifest.json">
@@ -771,7 +771,7 @@ body {
 <div class="app">
   <!-- Header -->
   <header class="header">
-    <h1>🌱 人生记录</h1>
+    <h1>🌱 Life日志</h1>
     <div class="header-actions">
       <button class="btn-icon" id="btnTheme" title="切换深色模式" aria-label="切换深色模式">🌙</button>
     </div>
@@ -796,7 +796,7 @@ body {
 
   <!-- Footer -->
   <div class="footer">
-    人生记录 v2.0 &nbsp;|&nbsp; <span id="storageInfo">存储: 计算中...</span> &nbsp;|&nbsp; 定期导出备份
+    Life日志 v2.0 &nbsp;|&nbsp; <span id="storageInfo">存储: 计算中...</span> &nbsp;|&nbsp; 定期导出备份
   </div>
 </div>
 
@@ -1682,7 +1682,7 @@ document.getElementById('btnExport').addEventListener('click', () => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   const now = new Date();
-  const filename = `人生记录备份-${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}.json`;
+  const filename = `Life日志备份-${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}.json`;
   a.href = url;
   a.download = filename;
   a.click();
@@ -1922,8 +1922,8 @@ self.addEventListener('fetch', e => {
   manifest.json — PWA 清单参考
 ==========================================
 {
-  "name": "人生记录",
-  "short_name": "人生记录",
+  "name": "Life日志",
+  "short_name": "Life日志",
   "description": "记录你一生的故事",
   "start_url": ".",
   "display": "standalone",
