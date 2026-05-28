@@ -1257,7 +1257,7 @@ function renderAll() {
   STAGE_DEFS.forEach(def => {
     const stageData = appData.stages[def.id];
     const entries = stageData ? stageData.entries : [];
-    const isOpen = entries.length > 0 && def.id !== 'death'; // auto-open non-empty stages except death
+    const isOpen = false;
 
     const $stage = document.createElement('div');
     $stage.className = 'stage' + (isOpen ? ' open' : '');
